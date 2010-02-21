@@ -38,8 +38,8 @@ import Network.Socket
    , SocketType(Stream), connect
    , shutdown, ShutdownCmd(..)
    , sClose, setSocketOption, getPeerName
-   , socket, Family(AF_INET)
-   , getAddrInfo, addrFamily, addrAddress
+   , socket
+   , getAddrInfo, AddrInfo(addrFamily, addrAddress)
    )
 import qualified Network.Stream as Stream
    ( Stream(readBlock, readLine, writeBlock, close, closeOnEnd) )
@@ -56,7 +56,7 @@ import Network.Socket ( socketToHandle )
 import Data.Char  ( toLower )
 import Data.Word  ( Word8 )
 import Control.Concurrent
-import Control.Monad ( liftM, when )
+import Control.Monad ( liftM, when, foldM )
 import System.IO ( Handle, hFlush, IOMode(..), hClose )
 import System.IO.Error ( isEOFError )
 
@@ -198,20 +198,24 @@ openTCPConnection :: BufferType ty => String -> Int -> IO (HandleStream ty)
 openTCPConnection uri port = openTCPConnection_ uri port False
 
 openTCPConnection_ :: BufferType ty => String -> Int -> Bool -> IO (HandleStream ty)
-openTCPConnection_ uri port stashInput = do
-    (fam, a) <- getSockAddr uri port
-    s <- socket fam Stream 6
-    setSocketOption s KeepAlive 1
-    catchIO (connect s a) (\e -> sClose s >> ioError e)
-    socketConnection_ uri s stashInput
+openTCPConnection_ uri port stashInput =
+    do ais <- getAddrInfo_safe uri (show port)
+       res <- foldM tryConnect (Left $ userError $
+                                "openTCPConnection: no addresses in host entry for " ++ show uri) ais
+       case res of
+         Right s ->
+             socketConnection_ uri s stashInput
+         Left e ->
+             ioError e
  where
-  getSockAddr h p = do
-                    ais <- getAddrInfo_safe uri p
-                    case ais of
-                        ( ai : _ ) -> return (addrFamily ai, addrAddress ai)
-                        []     -> fail ("openTCPConnection: no addresses in host entry for " ++ show h)
+  tryConnect :: (Either IOError Socket) -> AddrInfo -> IO (Either IOError Socket)
+  tryConnect res@(Right _) _ = return res
+  tryConnect (Left _) ai = do s <- socket (addrFamily ai) Stream 6
+                              setSocketOption s KeepAlive 1
+                              catchIO (connect s (addrAddress ai) >>
+                                       return (Right s)) (\e -> sClose s >> return (Left e))
   getAddrInfo_safe h p = 
-    catchIO (getAddrInfo Nothing (Just h) (Just $ show p))
+    catchIO (getAddrInfo Nothing (Just h) (Just p))
             (\ _ -> fail ("openTCPConnection: host lookup failure for " ++ show h))
 
 -- | @socketConnection@, like @openConnection@ but using a pre-existing 'Socket'.
