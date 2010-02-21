@@ -33,13 +33,13 @@ module Network.TCP
 
    ) where
 
-import Network.BSD (getHostByName, hostAddresses)
 import Network.Socket
-   ( Socket, SockAddr(SockAddrInet), SocketOption(KeepAlive)
-   , SocketType(Stream), inet_addr, connect
+   ( Socket, SockAddr, SocketOption(KeepAlive)
+   , SocketType(Stream), connect
    , shutdown, ShutdownCmd(..)
    , sClose, setSocketOption, getPeerName
    , socket, Family(AF_INET)
+   , getAddrInfo, addrFamily, addrAddress
    )
 import qualified Network.Stream as Stream
    ( Stream(readBlock, readLine, writeBlock, close, closeOnEnd) )
@@ -199,23 +199,19 @@ openTCPConnection uri port = openTCPConnection_ uri port False
 
 openTCPConnection_ :: BufferType ty => String -> Int -> Bool -> IO (HandleStream ty)
 openTCPConnection_ uri port stashInput = do
-    s <- socket AF_INET Stream 6
+    (fam, a) <- getSockAddr uri port
+    s <- socket fam Stream 6
     setSocketOption s KeepAlive 1
-    hostA <- getHostAddr uri
-    let a = SockAddrInet (toEnum port) hostA
     catchIO (connect s a) (\e -> sClose s >> ioError e)
     socketConnection_ uri s stashInput
  where
-  getHostAddr h = do
-    catchIO (inet_addr uri)    -- handles ascii IP numbers
-            (\ _ -> do
-	        host <- getHostByName_safe uri
-                case hostAddresses host of
-                  []     -> fail ("openTCPConnection: no addresses in host entry for " ++ show h)
-                  (ha:_) -> return ha)
-
-  getHostByName_safe h = 
-    catchIO (getHostByName h)
+  getSockAddr h p = do
+                    ais <- getAddrInfo_safe uri p
+                    case ais of
+                        ( ai : _ ) -> return (addrFamily ai, addrAddress ai)
+                        []     -> fail ("openTCPConnection: no addresses in host entry for " ++ show h)
+  getAddrInfo_safe h p = 
+    catchIO (getAddrInfo Nothing (Just h) (Just $ show p))
             (\ _ -> fail ("openTCPConnection: host lookup failure for " ++ show h))
 
 -- | @socketConnection@, like @openConnection@ but using a pre-existing 'Socket'.
